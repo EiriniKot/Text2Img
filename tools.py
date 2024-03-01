@@ -6,8 +6,8 @@ from sentence_transformers import SentenceTransformer
 import torch
 from PIL import Image
 from tqdm import tqdm
-from time import sleep
-
+from typing import List, Union, Optional
+from qdrant_client.conversions import common_types as types
 
 class TxtImage:
     def __init__(self, location, port, collection_name):
@@ -22,9 +22,10 @@ class TxtImage:
                                             vectors_config=VectorParams(size=self.encoder.get_sentence_embedding_dimension(),
                                                                       distance=Distance.DOT))
 
-    def upload_images_description(self, captions, batch_size = 100):
+    def upload_images_description(self, captions, batch_size=100):
         """
-        captions = [{"name": "90.jpg", "description": "A man travels through time."},...,]
+        Upload a collection in qdrant. Example entries:
+            captions = [{"name": "dataset/1/90.jpg", "description": "A man travels through time."},...,]
         :param captions: list of captions
         :param batch_size: int
         :return:
@@ -40,22 +41,30 @@ class TxtImage:
             batch_points = points[start_idx:end_idx]
             self.client.upsert(collection_name=self.collection_name, points=batch_points)
 
-    def search_image(self, query, limit=3, score_threshold=0.5):
+    def search_image(self,
+                     query: Union[str, List[str]],
+                     limit: int = 3,
+                     score_threshold: float = 0.5) -> List[types.ScoredPoint]:
+        """
+        Search image from text. This function is responsible for finding the image that best represents
+        the query by comparing the query with the available captions.
+        :param query: the query to emb
+        :param limit: number of results return
+        :param score_threshold: a minimal score threshold for the result.
+        :return: List of found close points with similarity scores.
+        """
         emb = self.encoder.encode(query)
-        print(emb.shape)
         search_result = self.client.search(collection_name=self.collection_name, query_vector=emb, limit=limit,
                                            score_threshold=score_threshold)
-        print('search_result', search_result)
-
         return search_result
 
     def close(self):
+        """ Closes the connection """
         self.client.close()
 
 
 class ImgToTextGenerator:
-    def __init__(self, model_path):
-
+    def __init__(self, model_path: str, gen_kwargs: Optional[dict] = None) -> None:
         self.model = VisionEncoderDecoderModel.from_pretrained(model_path)
         self.feature_extractor = ViTImageProcessor.from_pretrained(model_path)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -63,12 +72,18 @@ class ImgToTextGenerator:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
-        max_length = 12
-        num_beams = 4
-        self.gen_kwargs = {"max_length": max_length, "num_beams": num_beams}
+        self.gen_kwargs = gen_kwargs if gen_kwargs else {"max_length": 12, "num_beams": 4}
         print('Generator initialized')
 
-    def predict_step(self, image_paths, batch_size=100):
+    def predict_step(self, image_paths: list[str], batch_size: int = 100) -> list[dict]:
+        """
+        Gets the img paths and runs the image caption generation model.
+        Then it creates a list of dictionaries for each img path and output prediction.
+
+        :param image_paths: list of image paths
+        :param batch_size: Batch size for handling image loading and predictions.
+        :return: dict_captions Example of output [{"name": /dataset/2/img.jpg, "description": "a dog in the park"}]
+        """
         len_paths = len(image_paths)
         dict_captions = []
         num_batches = (len_paths + batch_size - 1) // batch_size  # Calculate
@@ -89,7 +104,7 @@ class ImgToTextGenerator:
             pixel_values = pixel_values.to(self.device)
 
             output_ids = self.model.generate(pixel_values, **self.gen_kwargs)
-
+            # Decode prediction
             preds = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
             preds = [pred.strip() for pred in preds]
             outs = list(zip(image_paths, preds))

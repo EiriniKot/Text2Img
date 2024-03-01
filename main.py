@@ -2,12 +2,13 @@ import os
 from tools import TxtImage
 import streamlit as st
 
-QDRANT_HOST = os.environ['QDRANT_HOST']
-QDRANT_PORT = os.environ['QDRANT_PORT']
+# Get QDRANT_HOST from environment variable, default to 'localhost' if not provided
+QDRANT_HOST = os.environ.get('QDRANT_HOST', 'localhost')
+# Get QDRANT_PORT from environment variable, default to '6333' if not provided
+QDRANT_PORT = os.environ.get('QDRANT_PORT', '6333')
 
 # Initialize your ImgToTextGenerator and TxtImage objects
 txt_img = TxtImage(QDRANT_HOST, QDRANT_PORT, "ecommerce_collection")
-
 
 def main():
     st.title('Text to Image Translator')
